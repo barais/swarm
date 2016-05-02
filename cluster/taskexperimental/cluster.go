@@ -139,11 +139,26 @@ func (c *Cluster) generateUniqueID() string {
 
 // StartContainer starts a container
 func (c *Cluster) StartContainer(container *cluster.Container, hostConfig *dockerclient.HostConfig) error {
+	fmt.Printf("start a container" + container.Image + "\n")
 	return container.Engine.StartContainer(container.ID, hostConfig)
 }
 
 // CreateContainer aka schedule a brand new container into the cluster.
 func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string, authConfig *types.AuthConfig) (*cluster.Container, error) {
+	fmt.Printf("create a container" + name + "\n")
+	if len(config.Constraints()) > 0 {
+		fmt.Printf("Constraints" + config.Constraints()[0])
+
+	}
+	if len(config.Env) > 0 {
+		fmt.Printf("Env" + config.Env[0] + "\n")
+	}
+	for _, element := range c.Containers() {
+		fmt.Printf("Status" + element.ID + " : " + element.Status + "\n")
+	}
+
+	fmt.Printf(c.Containers()[0].Status)
+
 	container, err := c.createContainer(config, name, false, authConfig)
 
 	if err != nil {
