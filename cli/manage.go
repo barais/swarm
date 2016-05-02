@@ -18,6 +18,7 @@ import (
 	"github.com/docker/swarm/cluster"
 	"github.com/docker/swarm/cluster/mesos"
 	"github.com/docker/swarm/cluster/swarm"
+	"github.com/docker/swarm/cluster/taskexperimental"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/filter"
 	"github.com/docker/swarm/scheduler/strategy"
@@ -287,6 +288,9 @@ func manage(c *cli.Context) {
 	case "mesos-experimental":
 		log.Warn("WARNING: the mesos driver is currently experimental, use at your own risks")
 		cl, err = mesos.NewCluster(sched, tlsConfig, uri, c.StringSlice("cluster-opt"), engineOpts)
+	case "task-experimental":
+		log.Warn("WARNING: the task-experimental driver is currently experimental, use at your own risks")
+		cl, err = taskexperimental.NewCluster(sched, tlsConfig, discovery, c.StringSlice("cluster-opt"), engineOpts)
 	case "swarm":
 		cl, err = swarm.NewCluster(sched, tlsConfig, discovery, c.StringSlice("cluster-opt"), engineOpts)
 	default:
