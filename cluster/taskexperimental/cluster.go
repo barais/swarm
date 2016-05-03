@@ -55,13 +55,19 @@ func (p *pendingContainer) ToContainer() *cluster.Container {
 // Cluster is exported
 type Cluster struct {
 	sync.RWMutex
-
-	eventHandlers     *cluster.EventHandlers
-	engines           map[string]*cluster.Engine
-	pendingEngines    map[string]*cluster.Engine
-	scheduler         *scheduler.Scheduler
-	discovery         discovery.Backend
-	pendingContainers map[string]*pendingContainer
+	eventHandlers                   *cluster.EventHandlers
+	engines                         map[string]*cluster.Engine
+	pendingEngines                  map[string]*cluster.Engine
+	allcontainers                   map[string]*cluster.Container
+	allcontainersSwarmID            map[string]string
+	allcontainersSwarmIDClusterInfo map[string]*ClusterInfo
+	allcontainersSwarmIDName        map[string]string
+	startedcontainers               map[string]*cluster.Container
+	diedcontainers                  map[string]*cluster.Container
+	scheduler                       *scheduler.Scheduler
+	discovery                       discovery.Backend
+	pendingContainers               map[string]*pendingContainer
+	pendingContainersClusterInfo    map[string]*ClusterInfo
 
 	overcommitRatio float64
 	engineOpts      *cluster.EngineOpts
@@ -69,21 +75,39 @@ type Cluster struct {
 	TLSConfig       *tls.Config
 }
 
+// ClusterInfo is exported
+type ClusterInfo struct {
+	config            *cluster.ContainerConfig
+	name              string
+	withImageAffinity bool
+	authConfig        *types.AuthConfig
+	taskName          string
+	deps              []string
+}
+
 // NewCluster is exported
 func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery discovery.Backend, options cluster.DriverOpts, engineOptions *cluster.EngineOpts) (cluster.Cluster, error) {
 	log.WithFields(log.Fields{"name": "task-experimental"}).Debug("Initializing cluster")
 
 	cluster := &Cluster{
-		eventHandlers:     cluster.NewEventHandlers(),
-		engines:           make(map[string]*cluster.Engine),
-		pendingEngines:    make(map[string]*cluster.Engine),
-		scheduler:         scheduler,
-		TLSConfig:         TLSConfig,
-		discovery:         discovery,
-		pendingContainers: make(map[string]*pendingContainer),
-		overcommitRatio:   0.05,
-		engineOpts:        engineOptions,
-		createRetry:       0,
+		eventHandlers:                   cluster.NewEventHandlers(),
+		engines:                         make(map[string]*cluster.Engine),
+		pendingEngines:                  make(map[string]*cluster.Engine),
+		allcontainers:                   make(map[string]*cluster.Container),
+		allcontainersSwarmID:            make(map[string]string),
+		allcontainersSwarmIDClusterInfo: make(map[string]*ClusterInfo),
+		allcontainersSwarmIDName:        make(map[string]string),
+		startedcontainers:               make(map[string]*cluster.Container),
+		diedcontainers:                  make(map[string]*cluster.Container),
+		scheduler:                       scheduler,
+		TLSConfig:                       TLSConfig,
+		discovery:                       discovery,
+		pendingContainers:               make(map[string]*pendingContainer),
+		pendingContainersClusterInfo:    make(map[string]*ClusterInfo),
+
+		overcommitRatio: 0.05,
+		engineOpts:      engineOptions,
+		createRetry:     0,
 	}
 
 	if val, ok := options.Float("swarm.overcommit", ""); ok {
@@ -105,6 +129,7 @@ func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery
 	}
 
 	discoveryCh, errCh := cluster.discovery.Watch(nil)
+
 	go cluster.monitorDiscovery(discoveryCh, errCh)
 	go cluster.monitorPendingEngines()
 
@@ -113,6 +138,22 @@ func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery
 
 // Handle callbacks for the events
 func (c *Cluster) Handle(e *cluster.Event) error {
+	fmt.Printf(e.Action + " " + e.ID + " " + e.Status + "\n")
+	if e.Action == "start" {
+		c.startedcontainers[c.allcontainersSwarmID[e.ID]] = c.allcontainers[c.allcontainersSwarmID[e.ID]]
+	}
+	if e.Action == "die" {
+		delete(c.startedcontainers, e.ID)
+		c.diedcontainers[c.allcontainersSwarmID[e.ID]] = c.allcontainers[c.allcontainersSwarmID[e.ID]]
+		for _, element := range c.pendingContainersClusterInfo {
+			for _, element1 := range element.deps {
+				if c.allcontainersSwarmIDName[element1] == c.allcontainersSwarmID[e.ID] {
+					fmt.Println("can start " + element.taskName)
+				}
+			}
+		}
+
+	}
 	c.eventHandlers.Handle(e)
 	return nil
 }
@@ -139,27 +180,28 @@ func (c *Cluster) generateUniqueID() string {
 
 // StartContainer starts a container
 func (c *Cluster) StartContainer(container *cluster.Container, hostConfig *dockerclient.HostConfig) error {
-	fmt.Printf("start a container" + container.Image + "\n")
+	fmt.Printf("start a container" + container.Image + " " + container.ID + "\n")
+	//	if (container.Config.Env)
+	if len(container.Config.Env) > 0 {
+		fmt.Printf("Env" + container.Config.Env[0] + "\n")
+	}
+
+	//return nil
 	return container.Engine.StartContainer(container.ID, hostConfig)
 }
 
 // CreateContainer aka schedule a brand new container into the cluster.
 func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string, authConfig *types.AuthConfig) (*cluster.Container, error) {
-	fmt.Printf("create a container" + name + "\n")
-	if len(config.Constraints()) > 0 {
-		fmt.Printf("Constraints" + config.Constraints()[0])
 
-	}
-	if len(config.Env) > 0 {
-		fmt.Printf("Env" + config.Env[0] + "\n")
-	}
-	for _, element := range c.Containers() {
+	/*	for _, element := range c.Containers() {
 		fmt.Printf("Status" + element.ID + " : " + element.Status + "\n")
-	}
+	}*/
 
-	fmt.Printf(c.Containers()[0].Status)
+	//	fmt.Printf(c.Containers()[0].Status)
 
 	container, err := c.createContainer(config, name, false, authConfig)
+
+	//	fmt.Printf(container.ID)
 
 	if err != nil {
 		var retries int64
@@ -198,6 +240,54 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 		swarmID = c.generateUniqueID()
 		config.SetSwarmID(swarmID)
 	}
+	fmt.Printf("swarmID" + swarmID + "\n")
+
+	var name1 string
+	var dep string
+	var deps []string
+
+	//fmt.Printf("create a container" + name + "\n")
+	/*if len(config.Constraints()) > 0 {
+		fmt.Printf("Constraints" + config.Constraints()[0])
+
+	}*/
+	if len(config.Env) > 0 {
+		fmt.Printf("Env" + config.Env[0] + "\n")
+	}
+
+	for _, element := range config.Env {
+		fmt.Println(element)
+		res := strings.Split(element, ":")
+		if res[0] == "name" {
+			name1 = res[1]
+		} else if res[0] == "deps" {
+			fmt.Println("find a deps")
+			dep = res[1]
+		}
+	}
+
+	if dep != "" {
+		deps = strings.Split(dep, ",")
+	}
+	fmt.Println(dep)
+
+	fmt.Println(deps)
+
+	fmt.Println(len(deps))
+
+	c1 := &ClusterInfo{
+		config:            config,
+		name:              name,
+		withImageAffinity: true,
+		authConfig:        authConfig,
+		taskName:          name1,
+		deps:              deps,
+	}
+	c.allcontainersSwarmIDClusterInfo[swarmID] = c1
+	c.pendingContainersClusterInfo[swarmID] = c1
+	c.allcontainersSwarmIDName[name1] = swarmID
+
+	fmt.Println("put " + name1 + " with " + swarmID)
 
 	if network := c.Networks().Get(string(config.HostConfig.NetworkMode)); network != nil && network.Scope == "local" {
 		if !config.HaveNodeConstraint() {
@@ -209,7 +299,25 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 	if withImageAffinity {
 		config.AddAffinity("image==" + config.Image)
 	}
+	//Give swarmID of deps
+	for _, element := range deps {
+		if _, ok := c.allcontainersSwarmID[element]; !ok {
+			fmt.Println("must wait deps not yet received")
+			c.scheduler.Unlock()
+			return nil, fmt.Errorf("Your container is pending")
+		} else if _, ok := c.diedcontainers[c.allcontainersSwarmID[element]]; !ok {
+			fmt.Println("must wait deps not yet finished")
+			c.scheduler.Unlock()
+			return nil, fmt.Errorf("Your container is pending")
+		}
 
+	}
+	fmt.Println("can go")
+	return c.endcreateContainer(config, name, withImageAffinity, authConfig, swarmID)
+
+}
+
+func (c *Cluster) endcreateContainer(config *cluster.ContainerConfig, name string, withImageAffinity bool, authConfig *types.AuthConfig, swarmID string) (*cluster.Container, error) {
 	nodes, err := c.scheduler.SelectNodesForContainer(c.listNodes(), config)
 
 	if withImageAffinity {
@@ -232,13 +340,15 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 		Config: config,
 		Engine: engine,
 	}
-
 	c.scheduler.Unlock()
-
 	container, err := engine.Create(config, name, true, authConfig)
 
+	c.allcontainers[swarmID] = container
+
+	c.allcontainersSwarmID[container.ID] = swarmID
 	c.scheduler.Lock()
 	delete(c.pendingContainers, swarmID)
+	delete(c.pendingContainersClusterInfo, swarmID)
 	c.scheduler.Unlock()
 
 	return container, err
