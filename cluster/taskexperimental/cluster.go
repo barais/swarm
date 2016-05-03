@@ -104,10 +104,9 @@ func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery
 		discovery:                       discovery,
 		pendingContainers:               make(map[string]*pendingContainer),
 		pendingContainersClusterInfo:    make(map[string]*ClusterInfo),
-
-		overcommitRatio: 0.05,
-		engineOpts:      engineOptions,
-		createRetry:     0,
+		overcommitRatio:                 0.05,
+		engineOpts:                      engineOptions,
+		createRetry:                     0,
 	}
 
 	if val, ok := options.Float("swarm.overcommit", ""); ok {
@@ -148,7 +147,9 @@ func (c *Cluster) Handle(e *cluster.Event) error {
 		for _, element := range c.pendingContainersClusterInfo {
 			for _, element1 := range element.deps {
 				if c.allcontainersSwarmIDName[element1] == c.allcontainersSwarmID[e.ID] {
-					fmt.Println("can start " + element.taskName)
+					cont, _ := c.endcreateContainer(element.config, element.name, element.withImageAffinity, element.authConfig, c.allcontainersSwarmIDName[element.taskName], true)
+					//					fmt.Println("can start " + element.taskName)
+					cont.Engine.StartContainer(cont.ID, &dockerclient.HostConfig{})
 				}
 			}
 		}
@@ -181,10 +182,6 @@ func (c *Cluster) generateUniqueID() string {
 // StartContainer starts a container
 func (c *Cluster) StartContainer(container *cluster.Container, hostConfig *dockerclient.HostConfig) error {
 	fmt.Printf("start a container" + container.Image + " " + container.ID + "\n")
-	//	if (container.Config.Env)
-	if len(container.Config.Env) > 0 {
-		fmt.Printf("Env" + container.Config.Env[0] + "\n")
-	}
 
 	//return nil
 	return container.Engine.StartContainer(container.ID, hostConfig)
@@ -240,7 +237,7 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 		swarmID = c.generateUniqueID()
 		config.SetSwarmID(swarmID)
 	}
-	fmt.Printf("swarmID" + swarmID + "\n")
+	//fmt.Printf("swarmID" + swarmID + "\n")
 
 	var name1 string
 	var dep string
@@ -251,17 +248,12 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 		fmt.Printf("Constraints" + config.Constraints()[0])
 
 	}*/
-	if len(config.Env) > 0 {
-		fmt.Printf("Env" + config.Env[0] + "\n")
-	}
 
 	for _, element := range config.Env {
-		fmt.Println(element)
 		res := strings.Split(element, ":")
 		if res[0] == "name" {
 			name1 = res[1]
 		} else if res[0] == "deps" {
-			fmt.Println("find a deps")
 			dep = res[1]
 		}
 	}
@@ -269,12 +261,6 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 	if dep != "" {
 		deps = strings.Split(dep, ",")
 	}
-	fmt.Println(dep)
-
-	fmt.Println(deps)
-
-	fmt.Println(len(deps))
-
 	c1 := &ClusterInfo{
 		config:            config,
 		name:              name,
@@ -286,8 +272,6 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 	c.allcontainersSwarmIDClusterInfo[swarmID] = c1
 	c.pendingContainersClusterInfo[swarmID] = c1
 	c.allcontainersSwarmIDName[name1] = swarmID
-
-	fmt.Println("put " + name1 + " with " + swarmID)
 
 	if network := c.Networks().Get(string(config.HostConfig.NetworkMode)); network != nil && network.Scope == "local" {
 		if !config.HaveNodeConstraint() {
@@ -302,23 +286,27 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 	//Give swarmID of deps
 	for _, element := range deps {
 		if _, ok := c.allcontainersSwarmID[element]; !ok {
-			fmt.Println("must wait deps not yet received")
+			//	fmt.Println("must wait deps not yet received")
 			c.scheduler.Unlock()
-			return nil, fmt.Errorf("Your container is pending")
+			return nil, fmt.Errorf("Your container is pending, il will wait until deps will be received")
 		} else if _, ok := c.diedcontainers[c.allcontainersSwarmID[element]]; !ok {
-			fmt.Println("must wait deps not yet finished")
+			//	fmt.Println("Your container is pending, il will wait until deps will be over")
 			c.scheduler.Unlock()
-			return nil, fmt.Errorf("Your container is pending")
+			return nil, fmt.Errorf("Your container is pending, il will wait until deps will be over")
 		}
 
 	}
-	fmt.Println("can go")
-	return c.endcreateContainer(config, name, withImageAffinity, authConfig, swarmID)
+	//	fmt.Println("can go")
+	return c.endcreateContainer(config, name, withImageAffinity, authConfig, swarmID, false)
 
 }
 
-func (c *Cluster) endcreateContainer(config *cluster.ContainerConfig, name string, withImageAffinity bool, authConfig *types.AuthConfig, swarmID string) (*cluster.Container, error) {
+func (c *Cluster) endcreateContainer(config *cluster.ContainerConfig, name string, withImageAffinity bool, authConfig *types.AuthConfig, swarmID string, lock bool) (*cluster.Container, error) {
 	nodes, err := c.scheduler.SelectNodesForContainer(c.listNodes(), config)
+
+	if lock {
+		c.scheduler.Lock()
+	}
 
 	if withImageAffinity {
 		config.RemoveAffinity("image==" + config.Image)
@@ -340,11 +328,11 @@ func (c *Cluster) endcreateContainer(config *cluster.ContainerConfig, name strin
 		Config: config,
 		Engine: engine,
 	}
+
 	c.scheduler.Unlock()
 	container, err := engine.Create(config, name, true, authConfig)
 
 	c.allcontainers[swarmID] = container
-
 	c.allcontainersSwarmID[container.ID] = swarmID
 	c.scheduler.Lock()
 	delete(c.pendingContainers, swarmID)
