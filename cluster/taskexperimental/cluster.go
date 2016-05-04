@@ -59,6 +59,7 @@ type Cluster struct {
 	engines                         map[string]*cluster.Engine
 	pendingEngines                  map[string]*cluster.Engine
 	allcontainers                   map[string]*cluster.Container
+	tempFakecontainers              map[string]*cluster.Container
 	allcontainersSwarmID            map[string]string
 	allcontainersSwarmIDClusterInfo map[string]*ClusterInfo
 	allcontainersSwarmIDName        map[string]string
@@ -94,6 +95,7 @@ func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery
 		engines:                         make(map[string]*cluster.Engine),
 		pendingEngines:                  make(map[string]*cluster.Engine),
 		allcontainers:                   make(map[string]*cluster.Container),
+		tempFakecontainers:              make(map[string]*cluster.Container),
 		allcontainersSwarmID:            make(map[string]string),
 		allcontainersSwarmIDClusterInfo: make(map[string]*ClusterInfo),
 		allcontainersSwarmIDName:        make(map[string]string),
@@ -149,6 +151,7 @@ func (c *Cluster) Handle(e *cluster.Event) error {
 				if c.allcontainersSwarmIDName[element1] == c.allcontainersSwarmID[e.ID] {
 					cont, _ := c.endcreateContainer(element.config, element.name, element.withImageAffinity, element.authConfig, c.allcontainersSwarmIDName[element.taskName], true)
 					//					fmt.Println("can start " + element.taskName)
+					delete(c.tempFakecontainers, c.allcontainersSwarmID[e.ID])
 					cont.Engine.StartContainer(cont.ID, &dockerclient.HostConfig{})
 				}
 			}
@@ -182,6 +185,11 @@ func (c *Cluster) generateUniqueID() string {
 // StartContainer starts a container
 func (c *Cluster) StartContainer(container *cluster.Container, hostConfig *dockerclient.HostConfig) error {
 	fmt.Printf("start a container" + container.Image + " " + container.ID + "\n")
+
+	_, ok := c.tempFakecontainers[container.ID]
+	if ok {
+		return nil
+	}
 
 	//return nil
 	return container.Engine.StartContainer(container.ID, hostConfig)
@@ -237,7 +245,7 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 		swarmID = c.generateUniqueID()
 		config.SetSwarmID(swarmID)
 	}
-	//fmt.Printf("swarmID" + swarmID + "\n")
+	fmt.Printf("swarmID" + swarmID + "\n")
 
 	var name1 string
 	var dep string
@@ -285,14 +293,27 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 	}
 	//Give swarmID of deps
 	for _, element := range deps {
-		if _, ok := c.allcontainersSwarmID[element]; !ok {
-			//	fmt.Println("must wait deps not yet received")
+		if _, ok := c.allcontainersSwarmIDName[element]; !ok {
+			fmt.Println("must wait deps not yet received")
 			c.scheduler.Unlock()
-			return nil, fmt.Errorf("Your container is pending, il will wait until deps will be received")
-		} else if _, ok := c.diedcontainers[c.allcontainersSwarmID[element]]; !ok {
-			//	fmt.Println("Your container is pending, il will wait until deps will be over")
+			cont1 := &cluster.Container{}
+			cont1.ID = swarmID
+			cont1.Image = config.Image
+			c.tempFakecontainers[swarmID] = cont1
+
+			return cont1, nil
+
+		} else if _, ok := c.diedcontainers[c.allcontainersSwarmIDName[element]]; !ok {
+			fmt.Println("Your container is pending, il will wait until deps will be over")
 			c.scheduler.Unlock()
-			return nil, fmt.Errorf("Your container is pending, il will wait until deps will be over")
+			cont1 := &cluster.Container{}
+			cont1.ID = swarmID
+			cont1.Image = config.Image
+			c.tempFakecontainers[swarmID] = cont1
+
+			return cont1, nil
+
+			//			return nil, fmt.Errorf("Your container is pending, il will wait until deps will be over")
 		}
 
 	}
@@ -828,6 +849,8 @@ func (c *Cluster) Import(source string, repository string, tag string, imageRead
 
 // Containers returns all the containers in the cluster.
 func (c *Cluster) Containers() cluster.Containers {
+	fmt.Println("get containers")
+
 	c.RLock()
 	defer c.RUnlock()
 
@@ -836,6 +859,9 @@ func (c *Cluster) Containers() cluster.Containers {
 		out = append(out, e.Containers()...)
 	}
 
+	/*	for _, value := range c.tempFakecontainers {
+		out = append(out, value)
+	}*/
 	return out
 }
 
@@ -869,9 +895,15 @@ func (c *Cluster) checkNameUniqueness(name string) bool {
 
 // Container returns the container with IDOrName in the cluster
 func (c *Cluster) Container(IDOrName string) *cluster.Container {
+	fmt.Println("get containers name " + IDOrName)
+
 	// Abort immediately if the name is empty.
 	if len(IDOrName) == 0 {
 		return nil
+	}
+	c1, ok := c.tempFakecontainers[IDOrName]
+	if ok {
+		return c1
 	}
 
 	c.RLock()

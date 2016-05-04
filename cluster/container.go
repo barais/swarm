@@ -74,6 +74,7 @@ func FullStateString(state *types.ContainerState) string {
 
 // Refresh container
 func (c *Container) Refresh() (*Container, error) {
+
 	return c.Engine.refreshContainer(c.ID, true)
 }
 
