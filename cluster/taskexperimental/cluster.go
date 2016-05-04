@@ -294,7 +294,7 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 	//Give swarmID of deps
 	for _, element := range deps {
 		if _, ok := c.allcontainersSwarmIDName[element]; !ok {
-			fmt.Println("must wait deps not yet received")
+			//fmt.Println("must wait deps not yet received")
 			c.scheduler.Unlock()
 			cont1 := &cluster.Container{}
 			cont1.ID = swarmID
@@ -304,7 +304,7 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 			return cont1, nil
 
 		} else if _, ok := c.diedcontainers[c.allcontainersSwarmIDName[element]]; !ok {
-			fmt.Println("Your container is pending, il will wait until deps will be over")
+			//fmt.Println("Your container is pending, il will wait until deps will be over")
 			c.scheduler.Unlock()
 			cont1 := &cluster.Container{}
 			cont1.ID = swarmID
