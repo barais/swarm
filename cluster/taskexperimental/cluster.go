@@ -849,7 +849,6 @@ func (c *Cluster) Import(source string, repository string, tag string, imageRead
 
 // Containers returns all the containers in the cluster.
 func (c *Cluster) Containers() cluster.Containers {
-	fmt.Println("get containers")
 
 	c.RLock()
 	defer c.RUnlock()
@@ -895,7 +894,6 @@ func (c *Cluster) checkNameUniqueness(name string) bool {
 
 // Container returns the container with IDOrName in the cluster
 func (c *Cluster) Container(IDOrName string) *cluster.Container {
-	fmt.Println("get containers name " + IDOrName)
 
 	// Abort immediately if the name is empty.
 	if len(IDOrName) == 0 {
