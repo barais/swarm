@@ -276,9 +276,13 @@ func (e *Engine) isConnected() bool {
 
 // IsHealthy returns true if the engine is healthy
 func (e *Engine) IsHealthy() bool {
-	e.RLock()
-	defer e.RUnlock()
-	return e.state == stateHealthy
+	if e != nil {
+		e.RLock()
+		defer e.RUnlock()
+		return e.state == stateHealthy
+	} else {
+		return false
+	}
 }
 
 // HealthIndicator returns degree of healthiness between 0 and 100.
